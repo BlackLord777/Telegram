@@ -1,0 +1,78 @@
+import wikipedia
+import telebot
+
+bot = telebot.TeleBot('token')
+
+# словарь для хранения языка википедии для каждого пользователя
+user_language = {}
+
+# функция для получения языка википедии для пользователя
+def get_language(chat_id):
+    return user_language.get(chat_id, 'en')
+
+# обработчик для команды /start
+@bot.message_handler(commands=['start'])
+def start(message):
+    sending_mess = f"<b>Привет, {message.from_user.first_name}!</b>\nВведите язык в формате 'en', 'ru' и т.д., для поиска. Например: ru"
+    bot.send_message(message.chat.id, sending_mess, parse_mode='html')
+
+# обработчик для получения языка википедии от пользователя
+@bot.message_handler(func=lambda message: message.text in wikipedia.languages())
+def language(message):
+    user_language[message.chat.id] = message.text
+    bot.send_message(message.chat.id, 'Язык википедии сохранен. Теперь вы можете вводить запросы.')
+
+# обработчик для получения запросов
+@bot.message_handler(func=lambda message: message.text not in wikipedia.languages())
+def search(message):
+    global page_list
+    word = message.text.strip().lower()
+    lang = get_language(message.chat.id)
+    wikipedia.set_lang(lang)
+    try:
+        page_list = wikipedia.search(word)
+        if len(page_list) > 1:
+            sending_mess = "Выберите статью:"
+            keyboard = telebot.types.InlineKeyboardMarkup()
+            for i, title in enumerate(page_list[:5]):
+                button = telebot.types.InlineKeyboardButton(text=title, callback_data=f'summary {i}')
+                keyboard.add(button)
+            bot.send_message(message.chat.id, sending_mess, reply_markup=keyboard)
+        elif len(page_list) == 1:
+            final_message = wikipedia.summary(page_list[0])
+            bot.send_message(message.chat.id, final_message, parse_mode='html')
+        else:
+            bot.send_message(message.chat.id, 'По вашему запросу ничего не найдено')
+    except wikipedia.exceptions.PageError:
+        bot.send_message(message.chat.id, 'Страница не найдена')
+    except wikipedia.exceptions.DisambiguationError as e:
+        page_list = e.options[:5]
+        sending_mess = "Выберите статью:"
+        keyboard = telebot.types.InlineKeyboardMarkup()
+        for i, option in enumerate(page_list):
+            button = telebot.types.InlineKeyboardButton(text=option, callback_data=f'summary {i}')
+            keyboard.add(button)
+        bot.send_message(message.chat.id, sending_mess, reply_markup=keyboard)
+
+# обработчик для команды /random
+@bot.message_handler(commands=['random'])
+def random_article(message):
+    lang = get_language(message.chat.id)
+    wikipedia.set_lang(lang)
+    random_page = wikipedia.random()
+    final_message = wikipedia.summary(random_page)
+    bot.send_message(message.chat.id, final_message, parse_mode='html')
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('summary'))
+def callback_handler(call):
+    global page_list
+    _, idx = call.data.split()
+    idx = int(idx)
+    try:
+        final_message = wikipedia.summary(page_list[idx])
+    except (IndexError, NameError):
+        final_message = 'Что-то пошло не так, попробуйте снова'
+    bot.send_message(call.message.chat.id, final_message, parse_mode='html')
+    bot.answer_callback_query(call)
+bot.polling(none_stop=True)
